@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time as time_module
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -727,7 +729,31 @@ def add_rests(blocks: list[Block], planned: list[PlannedEvent], logs: list[str])
             )
 
 
-def delete_auto_events(service, calendar_id: str, start: datetime, end: datetime) -> int:
+def execute_calendar_write(request, config: dict[str, Any]):
+    api_cfg = config.get("api", {})
+    max_retries = int(api_cfg.get("max_retries", 5))
+    write_delay = float(api_cfg.get("write_delay_sec", 0.25))
+    for attempt in range(max_retries + 1):
+        try:
+            result = request.execute()
+            if write_delay > 0:
+                time_module.sleep(write_delay)
+            return result
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            text = str(exc)
+            retryable = status in {403, 429, 500, 503} and (
+                "rateLimitExceeded" in text
+                or "userRateLimitExceeded" in text
+                or "Rate Limit Exceeded" in text
+                or status in {429, 500, 503}
+            )
+            if not retryable or attempt >= max_retries:
+                raise
+            time_module.sleep(min(2**attempt, 30))
+
+
+def delete_auto_events(service, calendar_id: str, start: datetime, end: datetime, config: dict[str, Any]) -> int:
     events = (
         service.events()
         .list(
@@ -743,13 +769,13 @@ def delete_auto_events(service, calendar_id: str, start: datetime, end: datetime
     deleted = 0
     for event in events:
         if is_auto_event(event):
-            service.events().delete(calendarId=calendar_id, eventId=event["id"]).execute()
+            execute_calendar_write(service.events().delete(calendarId=calendar_id, eventId=event["id"]), config)
             deleted += 1
     return deleted
 
 
-def insert_event(service, calendar_id: str, event: PlannedEvent) -> None:
-    service.events().insert(
+def insert_event(service, calendar_id: str, event: PlannedEvent, config: dict[str, Any]) -> None:
+    request = service.events().insert(
         calendarId=calendar_id,
         body={
             "summary": f"{event.tag} {event.title}",
@@ -758,7 +784,8 @@ def insert_event(service, calendar_id: str, event: PlannedEvent) -> None:
             "end": {"dateTime": iso(event.end), "timeZone": "Asia/Tokyo"},
             "extendedProperties": {"private": {"location_type": event.location_type, "generated_by": "routine_scheduler"}},
         },
-    ).execute()
+    )
+    execute_calendar_write(request, config)
 
 
 def sync_bar_events(
@@ -791,7 +818,7 @@ def build_schedule(config: dict[str, Any], service, start: datetime, days: int, 
     calendar_ids = reference_ids
 
     if not dry_run:
-        deleted = delete_auto_events(service, output_id, start, end)
+        deleted = delete_auto_events(service, output_id, start, end, config)
         logs.append(f"削除: AUTO系 {deleted}件")
     else:
         logs.append("DRY RUN: Googleカレンダーには書き込みません")
@@ -824,7 +851,7 @@ def build_schedule(config: dict[str, Any], service, start: datetime, days: int, 
     planned.sort(key=lambda x: x.start)
     if not dry_run:
         for event in planned:
-            insert_event(service, output_id, event)
+            insert_event(service, output_id, event, config)
     return planned, logs, sleep_total
 
 
