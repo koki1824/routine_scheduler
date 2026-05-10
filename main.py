@@ -106,25 +106,50 @@ def get_sheets_service(config: dict[str, Any]):
     return get_google_service(config, "sheets", "v4")
 
 
+def get_secret_json(name: str) -> dict[str, Any] | None:
+    env_value = os.environ.get(name.upper())
+    if env_value:
+        return json.loads(env_value)
+    try:
+        import streamlit as st
+
+        if name in st.secrets:
+            value = st.secrets[name]
+            if isinstance(value, str):
+                return json.loads(value)
+            return dict(value)
+    except Exception:
+        return None
+    return None
+
+
 def get_google_service(config: dict[str, Any], service_name: str, version: str):
     token_path = BASE_DIR / config.get("token_file", "token.json")
     credentials_path = BASE_DIR / config.get("credentials_file", "credentials.json")
+    token_info = get_secret_json("google_token_json")
+    credentials_info = get_secret_json("google_credentials_json")
     creds = None
 
-    if token_path.exists():
+    if token_info:
+        creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+    elif token_path.exists():
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            if not credentials_path.exists():
+            if credentials_info:
+                flow = InstalledAppFlow.from_client_config(credentials_info, SCOPES)
+            elif credentials_path.exists():
+                flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), SCOPES)
+            else:
                 raise FileNotFoundError(
                     f"{credentials_path} が見つかりません。Google CloudからOAuthクライアントJSONを配置してください。"
                 )
-            flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), SCOPES)
             creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json(), encoding="utf-8")
+        if not token_info:
+            token_path.write_text(creds.to_json(), encoding="utf-8")
 
     return build(service_name, version, credentials=creds)
 
