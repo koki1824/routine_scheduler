@@ -7,12 +7,20 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from main import build_schedule, get_calendar_service, get_raw_events, load_json
+from main import (
+    build_schedule,
+    get_calendar_service,
+    get_raw_events,
+    load_bar_selection_data,
+    load_json,
+    load_manual_data,
+    save_bar_selection_data,
+    save_manual_data,
+    using_sheets_storage,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
-MANUAL_PATH = BASE_DIR / "manual_blocks.json"
-SELECTION_PATH = BASE_DIR / "bar_event_selections.json"
 TZ = ZoneInfo("Asia/Tokyo")
 
 LOCATION_OPTIONS = {
@@ -44,29 +52,23 @@ def is_required_bar_event(title: str, config: dict) -> bool:
 
 
 def load_blocks() -> list[dict]:
-    if not MANUAL_PATH.exists():
-        return []
-    with MANUAL_PATH.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    config = load_json(BASE_DIR / "config.json", {})
+    return load_manual_data(config)
 
 
 def save_blocks(blocks: list[dict]) -> None:
-    with MANUAL_PATH.open("w", encoding="utf-8") as f:
-        json.dump(blocks, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    config = load_json(BASE_DIR / "config.json", {})
+    save_manual_data(config, blocks)
 
 
 def load_selections() -> dict:
-    if not SELECTION_PATH.exists():
-        return {}
-    with SELECTION_PATH.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    config = load_json(BASE_DIR / "config.json", {})
+    return load_bar_selection_data(config)
 
 
 def save_selections(selections: dict) -> None:
-    with SELECTION_PATH.open("w", encoding="utf-8") as f:
-        json.dump(selections, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    config = load_json(BASE_DIR / "config.json", {})
+    save_bar_selection_data(config, selections)
 
 
 def dt(day: date, value: time) -> datetime:
@@ -75,6 +77,9 @@ def dt(day: date, value: time) -> datetime:
 
 st.set_page_config(page_title="Routine Scheduler", page_icon="Calendar", layout="wide")
 st.title("個人用スケジュール自動最適化")
+app_config = load_json(BASE_DIR / "config.json", {})
+storage_label = "Google Sheets" if using_sheets_storage(app_config) else "ローカルJSON"
+st.caption(f"保存先: {storage_label}")
 
 manual_tab, bar_tab, run_tab = st.tabs(["手動予定", "Bar予定選択", "スケジュール生成"])
 

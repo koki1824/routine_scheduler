@@ -16,7 +16,10 @@ from googleapiclient.discovery import build
 
 
 BASE_DIR = Path(__file__).resolve().parent
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
 TZ = ZoneInfo("Asia/Tokyo")
 AUTO_TAGS = [
     "[AUTO_INTERN]",
@@ -96,6 +99,14 @@ def iso(dt: datetime) -> str:
 
 
 def get_calendar_service(config: dict[str, Any]):
+    return get_google_service(config, "calendar", "v3")
+
+
+def get_sheets_service(config: dict[str, Any]):
+    return get_google_service(config, "sheets", "v4")
+
+
+def get_google_service(config: dict[str, Any], service_name: str, version: str):
     token_path = BASE_DIR / config.get("token_file", "token.json")
     credentials_path = BASE_DIR / config.get("credentials_file", "credentials.json")
     creds = None
@@ -115,7 +126,60 @@ def get_calendar_service(config: dict[str, Any]):
             creds = flow.run_local_server(port=0)
         token_path.write_text(creds.to_json(), encoding="utf-8")
 
-    return build("calendar", "v3", credentials=creds)
+    return build(service_name, version, credentials=creds)
+
+
+def using_sheets_storage(config: dict[str, Any]) -> bool:
+    storage = config.get("storage", {})
+    return storage.get("backend") == "google_sheets" and bool(storage.get("spreadsheet_id"))
+
+
+def sheet_read_json(config: dict[str, Any], sheet_name: str, default: Any) -> Any:
+    service = get_sheets_service(config)
+    spreadsheet_id = config["storage"]["spreadsheet_id"]
+    response = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=f"{sheet_name}!A1").execute()
+    values = response.get("values", [])
+    if not values or not values[0] or not values[0][0]:
+        return default
+    return json.loads(values[0][0])
+
+
+def sheet_write_json(config: dict[str, Any], sheet_name: str, data: Any) -> None:
+    service = get_sheets_service(config)
+    spreadsheet_id = config["storage"]["spreadsheet_id"]
+    body = {"values": [[json.dumps(data, ensure_ascii=False)]]}
+    service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"{sheet_name}!A1",
+        valueInputOption="RAW",
+        body=body,
+    ).execute()
+
+
+def load_manual_data(config: dict[str, Any]) -> list[dict[str, Any]]:
+    if using_sheets_storage(config):
+        return sheet_read_json(config, config["storage"].get("manual_sheet", "manual_blocks"), [])
+    return load_json(BASE_DIR / "manual_blocks.json", [])
+
+
+def save_manual_data(config: dict[str, Any], blocks: list[dict[str, Any]]) -> None:
+    if using_sheets_storage(config):
+        sheet_write_json(config, config["storage"].get("manual_sheet", "manual_blocks"), blocks)
+    else:
+        save_json(BASE_DIR / "manual_blocks.json", blocks)
+
+
+def load_bar_selection_data(config: dict[str, Any]) -> dict[str, Any]:
+    if using_sheets_storage(config):
+        return sheet_read_json(config, config["storage"].get("selection_sheet", "bar_event_selections"), {})
+    return load_json(BASE_DIR / "bar_event_selections.json", {})
+
+
+def save_bar_selection_data(config: dict[str, Any], selections: dict[str, Any]) -> None:
+    if using_sheets_storage(config):
+        sheet_write_json(config, config["storage"].get("selection_sheet", "bar_event_selections"), selections)
+    else:
+        save_json(BASE_DIR / "bar_event_selections.json", selections)
 
 
 def to_block(event: dict[str, Any], source: str) -> Block | None:
@@ -267,8 +331,8 @@ def get_freebusy(service, calendar_ids: list[str], start: datetime, end: datetim
     return result
 
 
-def load_manual_blocks() -> list[Block]:
-    data = load_json(BASE_DIR / "manual_blocks.json", [])
+def load_manual_blocks(config: dict[str, Any]) -> list[Block]:
+    data = load_manual_data(config)
     blocks = []
     for item in data:
         blocks.append(
@@ -710,10 +774,10 @@ def build_schedule(config: dict[str, Any], service, start: datetime, days: int, 
     freebusy = get_freebusy(service, calendar_ids, start, end)
     output_busy = get_non_auto_calendar_blocks(service, output_id, start, end, "output")
     calendar_busy = output_busy + [block for blocks in freebusy.values() for block in blocks]
-    manual_blocks = load_manual_blocks()
+    manual_blocks = load_manual_blocks(config)
     raw_bar_events = get_raw_events(service, bar_id, start, end) if bar_id else []
     raw_bar_blocks = [block for block in (to_bar_block(event) for event in raw_bar_events) if block]
-    selected_events = load_json(BASE_DIR / "bar_event_selections.json", {})
+    selected_events = load_bar_selection_data(config)
     bar_blocks = [block for block in (classify_bar_block(block, config, selected_events) for block in raw_bar_blocks) if block]
     ignored_bar_count = len(raw_bar_blocks) - len(bar_blocks)
     if raw_bar_blocks:

@@ -2,6 +2,12 @@
   "timezone": "Asia/Tokyo",
   "credentials_file": "credentials.json",
   "token_file": "token.json",
+  "storage": {
+    "backend": "google_sheets",
+    "spreadsheet_id": "13bwstrFzOE6_i_u73s9z4RQZUjzCOvQHym1BRoZYBpY",
+    "manual_sheet": "manual_blocks",
+    "selection_sheet": "bar_event_selections"
+  },
   "calendars": {
     "output": "primary",
     "bar_lemonade": "bo43e0906han1285o1cm9ei4n4@group.calendar.google.com",
