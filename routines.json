@@ -1,0 +1,14 @@
+[
+  {
+    "title": "朝ルーティン",
+    "duration_min": 45,
+    "candidate_starts": ["07:30", "08:30", "09:00"],
+    "location_type": "home"
+  },
+  {
+    "title": "夜ルーティン",
+    "duration_min": 45,
+    "candidate_starts": ["22:00", "23:00", "24:00"],
+    "location_type": "home"
+  }
+]
